@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import { config } from './config.js';
 import { getChallenge, markChallengeUsed, upsertUser } from './store.js';
 import { getCoinPriceUsd, getTokenBalance, verifyWalletSignature } from './solana.js';
@@ -24,6 +25,10 @@ export function createServer() {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static('public'));
 
+  app.get('/verify', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+  });
+
   app.get('/healthz', (req, res) => {
     res.json({ ok: true, app: 'coin-clash-telegram-holder-bot', coin: config.coinSymbol, mint: config.tokenMint });
   });
@@ -36,6 +41,7 @@ export function createServer() {
       pumpFunLink: config.pumpFunLink,
       jupiterSwapLink: config.jupiterSwapLink,
       playLink: config.playLink,
+      botUsername: config.botUsername,
     });
   });
 

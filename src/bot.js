@@ -1,8 +1,15 @@
-import { Telegraf, Markup } from 'telegraf';
+import { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { createChallenge, getUser, isVerified, listUsers, rememberJoin } from './store.js';
 import { getCoinPriceUsd, getTokenBalance } from './solana.js';
-import { buyKeyboard, verificationMessage } from './messages.js';
+import {
+  buildExtra,
+  buyKeyboard,
+  buyMessage,
+  groupWelcomeMessage,
+  menuMessage,
+  verificationMessage,
+} from './messages.js';
 
 export const bot = new Telegraf(config.botToken);
 
@@ -11,6 +18,39 @@ function makeVerifyUrl(ctxOrUser) {
   const username = ctxOrUser.from?.username || ctxOrUser.username || '';
   const challenge = createChallenge({ telegramId, username });
   return `${config.publicBaseUrl}/verify?token=${encodeURIComponent(challenge.token)}`;
+}
+
+async function replyCard(ctx, card, { photo = true } = {}) {
+  const extra = buildExtra(card.reply_markup);
+  if (photo && config.logoUrl) {
+    try {
+      await ctx.replyWithPhoto(config.logoUrl, {
+        caption: card.text,
+        parse_mode: 'HTML',
+        reply_markup: card.reply_markup,
+      });
+      return;
+    } catch (err) {
+      console.warn('replyWithPhoto failed, falling back to text:', err.message);
+    }
+  }
+  await ctx.reply(card.text, extra);
+}
+
+async function sendPrivateCard(telegramId, card, { photo = true } = {}) {
+  if (photo && config.logoUrl) {
+    try {
+      await bot.telegram.sendPhoto(telegramId, config.logoUrl, {
+        caption: card.text,
+        parse_mode: 'HTML',
+        reply_markup: card.reply_markup,
+      });
+      return;
+    } catch (err) {
+      console.warn('sendPhoto private failed, falling back to text:', err.message);
+    }
+  }
+  await bot.telegram.sendMessage(telegramId, card.text, buildExtra(card.reply_markup));
 }
 
 async function restrictUser(ctx, chatId, userId) {
@@ -65,33 +105,17 @@ export async function unrestrictTelegramUser(telegramId) {
   }
 }
 
-bot.start(async (ctx) => {
-  const verifyUrl = makeVerifyUrl(ctx);
-  const msg = verificationMessage({ verifyUrl });
-  await ctx.reply(msg.text, msg.reply_markup);
-});
-
-bot.command('verify', async (ctx) => {
-  const verifyUrl = makeVerifyUrl(ctx);
-  const msg = verificationMessage({ verifyUrl });
-  await ctx.reply(msg.text, msg.reply_markup);
-});
-
-bot.command('buy', async (ctx) => {
-  await ctx.reply(`Buy or swap for ${config.coinSymbol}. The bot never asks for your seed phrase or private key.`, {
-    reply_markup: buyKeyboard(),
-  });
-});
-
-bot.command('pnl', async (ctx) => {
+async function sendTracker(ctx) {
   if (!config.enablePnlTracker) {
     await ctx.reply('P/L tracker is currently disabled.');
     return;
   }
+
   const user = getUser(ctx.from.id);
   if (!user?.wallet) {
     const verifyUrl = makeVerifyUrl(ctx);
-    await ctx.reply(`Connect and verify your wallet first.`, { reply_markup: { inline_keyboard: [[{ text: 'Verify wallet', url: verifyUrl }]] } });
+    const card = verificationMessage({ verifyUrl });
+    await ctx.reply('Connect and verify your wallet first.', buildExtra(card.reply_markup));
     return;
   }
 
@@ -107,33 +131,81 @@ bot.command('pnl', async (ctx) => {
     const initialValue = initialPrice ? initialBalance * initialPrice : null;
     const delta = currentValue != null && initialValue != null ? currentValue - initialValue : null;
     const deltaText = delta == null ? 'N/A' : `${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}`;
+    const pct = delta != null && initialValue ? (delta / initialValue) * 100 : null;
+    const pctText = pct == null ? 'N/A' : `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
 
     await ctx.reply(
-      `📊 ${config.coinSymbol} wallet tracker\n\nWallet: ${user.wallet.slice(0, 4)}…${user.wallet.slice(-4)}\nBalance: ${balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${config.coinSymbol}\nCurrent price: ${priceText}\nEstimated current value: ${currentValue == null ? 'N/A' : `$${currentValue.toFixed(2)}`}\nEstimated change since verification: ${deltaText}\n\nNote: this is an estimated tracker from first verification only. It is not tax/accounting software and may not include historical buys, sells, transfers, or LP activity.`,
-      { reply_markup: buyKeyboard() }
+      `📊 <b>${config.coinSymbol} Wallet Tracker</b>\n\n` +
+      `Wallet: <code>${user.wallet.slice(0, 6)}…${user.wallet.slice(-6)}</code>\n` +
+      `Balance: <b>${balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${config.coinSymbol}</b>\n` +
+      `Current price: ${priceText}\n` +
+      `Estimated value: ${currentValue == null ? 'N/A' : `$${currentValue.toFixed(2)}`}\n` +
+      `Change since verification: <b>${deltaText}</b> (${pctText})\n\n` +
+      `<i>Estimate only. This is not tax/accounting software and may not include historical buys, sells, transfers, LP activity, or multiple wallets.</i>`,
+      buildExtra(buyKeyboard())
     );
   } catch (err) {
     await ctx.reply(`Could not load tracker right now: ${err.message}`);
   }
+}
+
+bot.start(async (ctx) => {
+  const verifyUrl = makeVerifyUrl(ctx);
+  await replyCard(ctx, menuMessage({ verifyUrl }));
+});
+
+bot.command(['menu', 'help'], async (ctx) => {
+  const verifyUrl = makeVerifyUrl(ctx);
+  await replyCard(ctx, menuMessage({ verifyUrl }));
+});
+
+bot.command('verify', async (ctx) => {
+  const verifyUrl = makeVerifyUrl(ctx);
+  await replyCard(ctx, verificationMessage({ verifyUrl }));
+});
+
+bot.command('buy', async (ctx) => {
+  await replyCard(ctx, buyMessage(), { photo: false });
+});
+
+bot.command('pnl', sendTracker);
+bot.action('pnl', async (ctx) => {
+  await ctx.answerCbQuery('Loading wallet tracker...').catch(() => {});
+  await sendTracker(ctx);
 });
 
 bot.command('status', async (ctx) => {
   const user = getUser(ctx.from.id);
   if (!user?.wallet) {
-    await ctx.reply(`Not verified yet. Use /verify to unlock chat access.`);
+    const verifyUrl = makeVerifyUrl(ctx);
+    await ctx.reply(`Not verified yet. Use /verify to unlock chat access.`, buildExtra(verificationMessage({ verifyUrl }).reply_markup));
     return;
   }
-  await ctx.reply(`✅ Verified\nWallet: ${user.wallet.slice(0, 6)}…${user.wallet.slice(-6)}\nVerified at: ${user.verifiedAt}`);
+  await ctx.reply(
+    `✅ <b>Verified</b>\n` +
+    `Wallet: <code>${user.wallet.slice(0, 6)}…${user.wallet.slice(-6)}</code>\n` +
+    `Verified at: ${user.verifiedAt}`,
+    { parse_mode: 'HTML' }
+  );
 });
 
 bot.command('chatid', async (ctx) => {
-  await ctx.reply(`Chat ID: ${ctx.chat.id}`);
+  await ctx.reply(
+    `Chat ID:\n<code>${ctx.chat.id}</code>\n\nCopy that full number into Render as TELEGRAM_GROUP_ID.`,
+    { parse_mode: 'HTML' }
+  );
 });
 
 bot.command('stats', async (ctx) => {
   const users = listUsers();
   const verified = users.filter((u) => u.verifiedAt).length;
-  await ctx.reply(`Coin Clash bot stats\n\nVerified users: ${verified}\nStored users: ${users.length}\nRequired holding: ${config.minTokenBalance} ${config.coinSymbol}`);
+  await ctx.reply(
+    `⚔️ <b>Coin Clash Bot Stats</b>\n\n` +
+    `Verified users: <b>${verified}</b>\n` +
+    `Stored users: ${users.length}\n` +
+    `Required holding: <b>${config.minTokenBalance} ${config.coinSymbol}</b>`,
+    { parse_mode: 'HTML' }
+  );
 });
 
 bot.on('new_chat_members', async (ctx) => {
@@ -143,8 +215,13 @@ bot.on('new_chat_members', async (ctx) => {
     if (isVerified(member.id)) continue;
     await restrictUser(ctx, ctx.chat.id, member.id);
     const verifyUrl = makeVerifyUrl({ id: member.id, username: member.username });
-    const msg = verificationMessage({ verifyUrl });
-    await ctx.reply(`👋 Welcome ${member.first_name || 'player'} — verify ${config.coinSymbol} holdings to unlock chat.`, msg.reply_markup);
+    const card = groupWelcomeMessage({ verifyUrl, firstName: member.first_name || 'player' });
+    await ctx.reply(card.text, buildExtra(card.reply_markup));
+    try {
+      await sendPrivateCard(member.id, verificationMessage({ verifyUrl }));
+    } catch {
+      // User may not have opened a DM with the bot yet.
+    }
   }
 });
 
@@ -160,10 +237,11 @@ bot.on('message', async (ctx, next) => {
   }
   await restrictUser(ctx, ctx.chat.id, ctx.from.id);
   const verifyUrl = makeVerifyUrl(ctx);
-  const msg = verificationMessage({ verifyUrl });
+  const card = verificationMessage({ verifyUrl });
   try {
-    await ctx.telegram.sendMessage(ctx.from.id, msg.text, msg.reply_markup);
+    await sendPrivateCard(ctx.from.id, card);
   } catch {
-    await ctx.reply(`Please DM the bot and use /verify to unlock chat access.`);
+    const groupCard = groupWelcomeMessage({ verifyUrl, firstName: ctx.from.first_name || 'player' });
+    await ctx.reply(groupCard.text, buildExtra(groupCard.reply_markup));
   }
 });

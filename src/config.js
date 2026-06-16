@@ -14,11 +14,15 @@ function num(name, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
+
 export const config = {
   port: num('PORT', 3000),
   botToken: process.env.TELEGRAM_BOT_TOKEN || '',
   groupId: process.env.TELEGRAM_GROUP_ID || '',
-  publicBaseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, ''),
+  publicBaseUrl,
+  botUsername: (process.env.BOT_USERNAME || '').replace(/^@/, ''),
+  logoUrl: process.env.LOGO_URL || `${publicBaseUrl}/logo.png`,
 
   coinSymbol: process.env.COIN_SYMBOL || '$COIN',
   tokenMint: process.env.TOKEN_MINT || 'GYtKLZA3vdChVYxmxaEsU2JqNw8dAkiLryDvKdCTpump',
