@@ -3,7 +3,7 @@ import nacl from 'tweetnacl';
 import { config } from './config.js';
 
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdYwZK5Z9hrZfrGomzDDBbU8GVE6MRF5o94VtP');
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFJp26pVMZfXV2TfhoQ');
 
 export const connection = new Connection(config.solanaRpcUrl, 'confirmed');
 
