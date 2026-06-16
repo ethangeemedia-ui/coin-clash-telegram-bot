@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Coin Clash Telegram Verification</title>
+  <style>
+    :root {
+      --bg: #070511;
+      --panel: rgba(18, 12, 35, .9);
+      --gold: #ffd447;
+      --cyan: #21fff4;
+      --pink: #ff34d2;
+      --text: #f7f4ff;
+      --muted: #b8b0cf;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 15%, rgba(255,52,210,.22), transparent 30%),
+        radial-gradient(circle at 80% 30%, rgba(33,255,244,.18), transparent 32%),
+        linear-gradient(135deg, #05030b, #160b2f 50%, #080713);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(680px, 100%);
+      background: var(--panel);
+      border: 1px solid rgba(33,255,244,.35);
+      box-shadow: 0 0 40px rgba(33,255,244,.18), 0 0 70px rgba(255,52,210,.12);
+      border-radius: 28px;
+      padding: 28px;
+    }
+    h1 { margin: 0 0 8px; font-size: clamp(32px, 7vw, 64px); line-height: .95; }
+    .grad { background: linear-gradient(90deg, var(--gold), var(--cyan), var(--pink)); -webkit-background-clip: text; color: transparent; }
+    p { color: var(--muted); line-height: 1.6; font-size: 16px; }
+    .status { margin: 18px 0; padding: 14px; border-radius: 16px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); white-space: pre-wrap; }
+    button, a.button {
+      appearance: none;
+      border: none;
+      border-radius: 16px;
+      padding: 14px 18px;
+      background: linear-gradient(90deg, var(--gold), #ffad29);
+      color: #15091f;
+      font-weight: 900;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      margin: 6px 8px 6px 0;
+      box-shadow: 0 8px 24px rgba(255,212,71,.22);
+    }
+    button.secondary, a.secondary { background: rgba(33,255,244,.12); color: var(--text); border: 1px solid rgba(33,255,244,.35); box-shadow: none; }
+    code { color: var(--cyan); word-break: break-all; }
+    .small { font-size: 13px; color: #9189ad; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1><span class="grad">COIN CLASH</span><br/>Telegram Gate</h1>
+    <p id="intro">Connect your Solana wallet and sign a free message to prove you hold the minimum required $COIN. This does not spend funds.</p>
+    <div class="status" id="status">Loading verification challenge...</div>
+    <div>
+      <button id="connectBtn">Connect wallet</button>
+      <button id="signBtn" class="secondary" disabled>Sign and verify</button>
+      <a id="buyBtn" class="button secondary" href="#" target="_blank" rel="noopener">Buy $COIN</a>
+    </div>
+    <p class="small">Never enter your seed phrase or private key. This page only asks your wallet to sign a message proving ownership.</p>
+  </main>
+
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const token = qs.get('token');
+    const statusEl = document.getElementById('status');
+    const connectBtn = document.getElementById('connectBtn');
+    const signBtn = document.getElementById('signBtn');
+    const buyBtn = document.getElementById('buyBtn');
+    let provider = null;
+    let publicKey = null;
+    let challenge = null;
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function bytesToBase64(bytes) {
+      let bin = '';
+      bytes.forEach((b) => bin += String.fromCharCode(b));
+      return btoa(bin);
+    }
+
+    async function loadConfig() {
+      const res = await fetch('/api/config');
+      const cfg = await res.json();
+      buyBtn.href = cfg.pumpFunLink;
+      buyBtn.textContent = `Buy ${cfg.coinSymbol}`;
+    }
+
+    async function loadChallenge() {
+      if (!token) {
+        setStatus('Missing verification token. Go back to Telegram and tap Verify again.');
+        return;
+      }
+      const res = await fetch(`/api/challenge/${encodeURIComponent(token)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not load challenge');
+      challenge = json;
+      setStatus(`Required: ${json.minTokenBalance} ${json.coinSymbol}\nMint: ${json.tokenMint}\n\nReady to connect wallet.`);
+    }
+
+    function detectProvider() {
+      if (window.solana?.isPhantom || window.solana?.isSolflare || window.solana?.signMessage) return window.solana;
+      if (window.phantom?.solana) return window.phantom.solana;
+      if (window.solflare) return window.solflare;
+      return null;
+    }
+
+    connectBtn.onclick = async () => {
+      provider = detectProvider();
+      if (!provider) {
+        setStatus('No Solana wallet detected. Open this page in Phantom/Solflare browser or install a Solana wallet.');
+        return;
+      }
+      const resp = await provider.connect();
+      publicKey = (resp.publicKey || provider.publicKey).toString();
+      signBtn.disabled = false;
+      setStatus(`Connected wallet:\n${publicKey}\n\nNow sign the verification message.`);
+    };
+
+    signBtn.onclick = async () => {
+      if (!provider || !publicKey || !challenge) return;
+      try {
+        signBtn.disabled = true;
+        setStatus('Waiting for wallet signature...');
+        const encoded = new TextEncoder().encode(challenge.message);
+        const signed = await provider.signMessage(encoded, 'utf8');
+        const sig = signed.signature || signed;
+        const signatureBase64 = bytesToBase64(sig);
+        setStatus('Checking wallet balance on Solana...');
+        const res = await fetch('/api/verify', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token, publicKey, signatureBase64, message: challenge.message }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Verification failed');
+        setStatus(json.message || 'Verified. You can return to Telegram.');
+      } catch (err) {
+        signBtn.disabled = false;
+        setStatus(err.message || String(err));
+      }
+    };
+
+    loadConfig().catch(console.error);
+    loadChallenge().catch((e) => setStatus(e.message));
+  </script>
+</body>
+</html>
